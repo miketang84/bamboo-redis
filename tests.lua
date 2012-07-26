@@ -314,7 +314,7 @@ context("Client features", function()
         assert_not_nil(client.ping)
         assert_true(client:ping())
     end)
-
+--[[
     test("Pipelining commands", function()
         local replies, count = client:pipeline(function(p)
             p:ping()
@@ -338,7 +338,7 @@ context("Client features", function()
         assert_equal(replies[9][2], '40')
         assert_type(replies[10], 'table')
     end)
-
+--]]
     after(function()
         client:quit()
     end)
@@ -2226,7 +2226,7 @@ context("Redis commands", function()
             assert_true(client:flushdb())
         end)
     end)
-
+--[[
     context("Transactions", function()
         test("MULTI / EXEC (client:multi, client:exec)", function()
             if version:is('<', '2.0.0') then return end
@@ -2478,4 +2478,5 @@ context("Redis commands", function()
             if version:is('<', '2.5.0') then return end
         end)
     end)
+--]]
 end)

@@ -104,75 +104,26 @@ local function mset_request(command, ...)
     end
     return arguments
 end
---[[
-local function zset_range_request(command, ...)
-    local args, opts = {...}, { }
 
-    if #args >= 1 and type(args[#args]) == 'table' then
-        local options = table.remove(args, #args)
-        if options.withscores then
-            table.insert(opts, 'WITHSCORES')
-        end
-    end
+local function separate_reply(reply)
+	local vals, scores = {}, {}
+	for i = 1, #reply, 2 do
+		table.insert(vals, reply[i])
+		table.insert(scores, tonumber(reply[i + 1]))
+	end
 
-    for _, v in pairs(opts) do table.insert(args, v) end
-    return args
+	return vals, scores
 end
 
-local function zset_range_byscore_request(command, ...)
-    local args, opts = {...}, { }
+local function zset_range_reply(reply, withscores)
+	if withscores then
+		return separate_reply(reply)
+	else
+		return reply
+	end
 
-    if #args >= 1 and type(args[#args]) == 'table' then
-        local options = table.remove(args, #args)
-        if options.limit then
-            table.insert(opts, 'LIMIT')
-            table.insert(opts, options.limit.offset or options.limit[1])
-            table.insert(opts, options.limit.count or options.limit[2])
-        end
-        if options.withscores then
-            table.insert(opts, 'WITHSCORES')
-        end
-    end
-
-    for _, v in pairs(opts) do table.insert(args, v) end
-    return args
-end
---]]
-
-local function zset_range_reply(reply, command, ...)
-    local args = {...}
-    local opts = args[4]
-    if opts and (opts.withscores or string.lower(tostring(opts)) == 'withscores') then
-        local new_reply = { }
-        for i = 1, #reply, 2 do
-            table.insert(new_reply, { reply[i], reply[i + 1] })
-        end
-        return new_reply
-    else
-        return reply
-    end
 end
 
-local function zset_store_request(command, ...)
-    local args, opts = {...}, { }
-
-    if #args >= 1 and type(args[#args]) == 'table' then
-        local options = table.remove(args, #args)
-        if options.weights and type(options.weights) == 'table' then
-            table.insert(opts, 'WEIGHTS')
-            for _, weight in ipairs(options.weights) do
-                table.insert(opts, weight)
-            end
-        end
-        if options.aggregate then
-            table.insert(opts, 'AGGREGATE')
-            table.insert(opts, options.aggregate)
-        end
-    end
-
-    for _, v in pairs(opts) do table.insert(args, v) end
-    return args
-end
 
 local function hash_multi_request_builder(builder_callback)
     return function(command, ...)
@@ -235,127 +186,19 @@ local function load_methods(proto, commands)
     return client
 end
 
---[[
-local function create_client(proto, client_socket, commands)
-    local client = load_methods(proto, commands)
-    client.error = redis.error
-    client.network = {
-        socket = client_socket,
-        read   = network.read,
-        write  = network.write,
-    }
-    return client
-end
---]]
--- ############################################################################
-
-function network.write(client, buffer)
-    local _, err = client.network.socket:send(buffer)
-    if err then client.error(err) end
-end
-
-function network.read(client, len)
-    if len == nil then len = '*l' end
-    local line, err = client.network.socket:receive(len)
-    if not err then return line else client.error('connection error: ' .. err) end
-end
-
--- ############################################################################
---[[
-local multibulk_request = function(client, command, ...)
-    local args = {...}
-    local argsn = #args
-    local buffer = { true, true }
-
-    if argsn == 1 and type(args[1]) == 'table' then
-        argsn, args = #args[1], args[1]
-    end
-
-    buffer[1] = '*' .. tostring(argsn + 1) .. "\r\n"
-    buffer[2] = '$' .. #command .. "\r\n" .. command .. "\r\n"
-
-    local table_insert = table.insert
-    for _, argument in pairs(args) do
-        local s_argument = tostring(argument)
-        table_insert(buffer, '$' .. #s_argument .. "\r\n" .. s_argument .. "\r\n")
-    end
-
-    client.network.write(client, table.concat(buffer))
-end
-
-local response_reader = function(client)
-    local payload = client.network.read(client)
-    local prefix, data = payload:sub(1, -#payload), payload:sub(2)
-
-    -- status reply
-    if prefix == '+' then
-        if data == 'OK' then
-            return true
-        elseif data == 'QUEUED' then
-            return { queued = true }
-        else
-            return data
-        end
-
-   -- error reply
-    elseif prefix == '-' then
-        return client.error('redis error: ' .. data)
-
-   -- integer reply
-    elseif prefix == ':' then
-        local number = tonumber(data)
-
-        if not number then
-            if res == 'nil' then
-                return nil
-            end
-            client.error('cannot parse '..res..' as a numeric response.')
-        end
-
-        return number
-
-   -- bulk reply
-    elseif prefix == '$' then
-        local length = tonumber(data)
-
-        if not length then
-            client.error('cannot parse ' .. length .. ' as data length')
-        end
-
-        if length == -1 then
-            return nil
-        end
-
-        local nextchunk = client.network.read(client, length + 2)
-
-        return nextchunk:sub(1, -3)
-
-   -- multibulk reply
-    elseif prefix == '*' then
-        local count = tonumber(data)
-
-        if count == -1 then
-            return nil
-        end
-
-        local list = {}
-        if count > 0 then
-            for i = 1, count do
-                list[i] = client:read_response()
-            end
-        end
-        return list
-
-   -- unknown type of reply
-    else
-        return client.error('unknown response prefix: ' .. prefix)
-    end
-end
---]]
--- ############################################################################
 
 local default_serializer = function(cmd, ...) return ... end
-local default_parser = function(reply, ...) return reply end
+local default_parser = function(reply, ...) 
+	if reply == hiredis.NIL then 
+		reply = nil 
+	elseif reply == hiredis.OK then
+		reply = true
+	end
+
+	-- TODO: when meet error, hiredis return a table containing error info
+	-- how to form it, use unwrap_reply may slower the performance
+	return reply 
+end
 
 local function command(command, opts)
     command, opts = string.upper(command), opts or {}
@@ -374,7 +217,7 @@ local function command(command, opts)
 		--[[
 		client:write_request(command, serializer(command, ...))
         local reply = client:read_response()
-
+ 
         if type(reply) == 'table' and reply.queued then
             reply.parser = parser
             return reply
@@ -760,44 +603,7 @@ redis.command = command
 function redis.error(message, level)
     error(message, (level or 1) + 1)
 end
---[[
-function redis.connect(...)
-    local args, parameters = {...}, nil
 
-    if #args == 1 then
-        if type(args[1]) == 'table' then
-            parameters = args[1]
-        else
-            local uri = require('socket.url')
-            parameters = uri.parse(select(1, ...))
-            if parameters.scheme then
-                if parameters.query then
-                    for k, v in parameters.query:gmatch('([-_%w]+)=([-_%w]+)') do
-                        if k == 'tcp_nodelay' or k == 'tcp-nodelay' then
-                            parameters.tcp_nodelay = parse_boolean(v)
-                        end
-                    end
-                end
-            else
-                parameters.host = parameters.path
-            end
-        end
-    elseif #args > 1 then
-        local host, port = unpack(args)
-        parameters = { host = host, port = port }
-    end
-
-    local commands = redis.commands or {}
-    if type(commands) ~= 'table' then
-        redis.error('invalid type for the commands table')
-    end
-
-    -- local socket = create_connection(merge_defaults(parameters))
-    -- local client = create_client(client_prototype, socket, commands)
-
-    return client
-end
---]]
 
 function redis.connect(host, port)
 	host = host or '127.0.0.1'
@@ -854,19 +660,7 @@ redis.commands = {
     persist          = command('PERSIST', {     -- >= 2.2
         response = toboolean
     }),
-    keys             = command('KEYS', {
---        response = function(response)
---            if type(response) == 'string' then
---                -- backwards compatibility path for Redis < 2.0
---                local keys = {}
---                response:gsub('[^%s]+', function(key)
---                    table.insert(keys, key)
---                end)
---                response = keys
---            end
---            return response
---        end
-    }),
+    keys             = command('KEYS'),
     randomkey        = command('RANDOMKEY', {
         response = function(response)
             if response == '' then
@@ -957,10 +751,26 @@ redis.commands = {
     zadd             = command('ZADD'),
     zincrby          = command('ZINCRBY'),
     zrem             = command('ZREM'),
-    zrange           = command('ZRANGE'),
-    zrevrange        = command('ZREVRANGE'),
-    zrangebyscore    = command('ZRANGEBYSCORE'),
-    zrevrangebyscore = command('ZREVRANGEBYSCORE'),
+    zrange           = command('ZRANGE', {
+		response = function (reply, command, key, start, stop, withscores)
+			return zset_range_reply(reply, withscores)
+		end,
+	}),
+    zrevrange        = command('ZREVRANGE', {
+		response = function (reply, command, key, start, stop, withscores)
+			return zset_range_reply(reply, withscores)
+		end,
+	}),
+    zrangebyscore    = command('ZRANGEBYSCORE', {
+		response = function (reply, command, key, min, max, withscores)
+			return zset_range_reply(reply, withscores)
+		end,
+	}),
+    zrevrangebyscore = command('ZREVRANGEBYSCORE', {
+		response = function (reply, command, key, min, max, withscores)
+			return zset_range_reply(reply, withscores)
+		end,
+	}),
     zunionstore      = command('ZUNIONSTORE', {         -- >= 2.0
 --        request = zset_store_request
     }),
@@ -983,10 +793,8 @@ redis.commands = {
         response = toboolean
     }),
     hmset            = command('HMSET', {       -- >= 2.0
-        request  = hash_multi_request_builder(function(args, k, v)
-            table.insert(args, k)
-            table.insert(args, v)
-        end),
+--        request  = function (command, ...)
+--        end
     }),
     hincrby          = command('HINCRBY'),      -- >= 2.0
     hincrbyfloat     = command('HINCRBYFLOAT', {-- >= 2.6
@@ -996,9 +804,6 @@ redis.commands = {
     }),
     hget             = command('HGET'),         -- >= 2.0
     hmget            = command('HMGET', {       -- >= 2.0
-        request  = hash_multi_request_builder(function(args, k, v)
-            table.insert(args, v)
-        end),
     }),
     hdel             = command('HDEL'),        -- >= 2.0
     hexists          = command('HEXISTS', {     -- >= 2.0
@@ -1009,7 +814,7 @@ redis.commands = {
     hvals            = command('HVALS'),        -- >= 2.0
     hgetall          = command('HGETALL', {     -- >= 2.0
         response = function(reply, command, ...)
-            local new_reply = { }
+            local new_reply = {}
             for i = 1, #reply, 2 do new_reply[reply[i]] = reply[i + 1] end
             return new_reply
         end
@@ -1022,13 +827,7 @@ redis.commands = {
     echo             = command('ECHO'),
     auth             = command('AUTH'),
     select           = command('SELECT'),
-    quit             = command('QUIT', {
-        handler = function(client, command)
-            client:write_request(command)
-            client.network.socket:shutdown()
-            return true
-        end
-    }),
+    quit             = command('QUIT'),
 
     -- transactions
     multi            = command('MULTI'),        -- >= 2.0
@@ -1092,12 +891,7 @@ redis.commands = {
     info             = command('INFO', {
         response = parse_info,
     }),
-    shutdown         = command('SHUTDOWN', {
-        handler = function(client, command)
-            client:write_request(command)
-            client.network.socket:shutdown()
-        end
-    }),
+    shutdown         = command('SHUTDOWN'),
 }
 
 -- ############################################################################
