@@ -125,21 +125,6 @@ local function zset_range_reply(reply, withscores)
 end
 
 
-local function hash_multi_request_builder(builder_callback)
-    return function(command, ...)
-        local args, arguments = {...}, { }
-        if #args == 2 then
-            table.insert(arguments, args[1])
-            for k, v in pairs(args[2]) do
-                builder_callback(arguments, k, v)
-            end
-        else
-            arguments = args
-        end
-        return arguments
-    end
-end
-
 local function parse_info(response)
     local info = {}
     local current = info
@@ -200,8 +185,14 @@ local default_parser = function(reply, ...)
 	return reply 
 end
 
+local cmds_opts_collector = {}
+
+
 local function command(command, opts)
     command, opts = string.upper(command), opts or {}
+	if opts then
+		cmds_opts_collector[command] = opts
+	end
 
     if opts.handler then
         local handler = opts.handler
@@ -214,17 +205,6 @@ local function command(command, opts)
     local parser = opts.response or default_parser
 
     return function(client, ...)
-		--[[
-		client:write_request(command, serializer(command, ...))
-        local reply = client:read_response()
- 
-        if type(reply) == 'table' and reply.queued then
-            reply.parser = parser
-            return reply
-        end
-
-        return parser(reply, command, ...)
-		--]]
  		local reply = client.conn:command(command, serializer(command, ...))
 		return parser(reply, command, ...)
 	end
@@ -234,62 +214,73 @@ end
 
 local client_prototype = {}
 
-client_prototype.write_request = multibulk_request
-client_prototype.read_response = response_reader
-
 client_prototype.raw_command = function(client, ...)
-    client:write_request(table.remove(..., 1), ...)
-    return client:read_response()
+--    client:write_request(table.remove(..., 1), ...)
+--    return client:read_response()
 end
 
 -- Command pipelining
+--[[
+local ret = db:pipeline(function (p)
+	
+	for _, key in ipairs(list) do
+		p:hgetall(key)
+	end
+
+end)
+
+
+
+--]]
+
 
 client_prototype.pipeline = function(client, block)
-    local requests, replies, parsers = {}, {}, {}
-    local table_insert = table.insert
-    local socket_write, socket_read = client.network.write, client.network.read
-
-    client.network.write = function(_, buffer)
-        table_insert(requests, buffer)
-    end
-
-    -- TODO: this hack is necessary to temporarily reuse the current
-    --       request -> response handling implementation of redis-lua
-    --       without further changes in the code, but it will surely
-    --       disappear when the new command-definition infrastructure
-    --       will finally be in place.
-    client.network.read = function() return '+QUEUED' end
-
+	local cmd_collector = {}
+	
     local pipeline = setmetatable({}, {
         __index = function(env, name)
-            local cmd = client[name]
-            if not cmd then
-                client.error('unknown redis command: ' .. name, 2)
-            end
-            return function(self, ...)
-                local reply = cmd(client, ...)
-                table_insert(parsers, #requests, reply.parser)
-                return reply
+			print('enter pipeline metatable', name)
+			-- cmd is a function here, we need cmd name
+            --local cmd = client[name]
+--            if not cmd then
+--                client.error('unknown redis command: ' .. name, 2)
+--            end
+			-- name is command name
+			return function(self, ...)
+				-- collect the used commands
+				table.insert(cmd_collector, name)
+				print(name)
+				client.conn:append_command(name, ...)
+            	-- here, execute each command, which will call client.network.write, 
+				-- and client.network.read function. 
+                -- local reply = cmd(client, ...)
+                -- table_insert(parsers, #requests, reply.parser)
+                -- return reply
             end
         end
     })
 
     local success, retval = pcall(block, pipeline)
+	print('success', success)
+--    if not success then client.error(retval, 0) end
 
-    client.network.write, client.network.read = socket_write, socket_read
-    if not success then client.error(retval, 0) end
+	local replies = {}
+	for i = 1, #cmd_collector do
+		table.insert(replies, client.conn:get_reply())
+	end
 
-    client.network.write(client, table.concat(requests, ''))
+	for i = 1, #cmd_collector do
+		local opts = cmds_opts_collector[ string.upper(cmd_collector[i]) ]
+		print(cmd_collector[i])
+		if opts and opts.response then
+			print('-----------')
+			-- may lack some parameters, here only first replies
+			replies[i] = opts.response(replies[i])
+		end
+	end
 
-    for i = 1, #requests do
-        local reply, parser = client:read_response(), parsers[i]
-        if parser then
-            reply = parser(reply)
-        end
-        table_insert(replies, i, reply)
-    end
-
-    return replies, #requests
+	
+    return replies, #cmd_collector
 end
 
 -- Publish/Subscribe

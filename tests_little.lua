@@ -95,7 +95,28 @@ context("Bamboo Redis Testing", function ()
 			assert_equal(#ret, 4)
 			ptable(ret)
 			
-		end)		
+		end)
+
+		test("pipeline", function ()
+			db:del('test_hash')
+			db:del('test_hash1')
+			db:hmset('test_hash', 'field_1', '111', 'field_2', '222', 'field_3', '333', 'field_4', '444')
+			db:hmset('test_hash1', 'field_1', 'aa', 'field_2', 'bb', 'field_3', 'cc', 'field_4', 'dd')
+			
+			local ret = db:pipeline(function (p)
+				p:hgetall('test_hash')
+				p:hgetall('test_hash1')
+			end)
+			
+			fptable(ret)
+			
+--			assert_equal(type(ret), 'table')
+--			assert_equal(#ret, 4)
+			
+		end)
+
+
+		
 		test("hset, hdel & hgetall performance", function ()
 			local t1 = socket.gettime()
 			for i = 1, 1 do
