@@ -16,17 +16,6 @@ local defaults = {
     path        = nil
 }
 
-local function merge_defaults(parameters)
-    if parameters == nil then
-        parameters = {}
-    end
-    for k, v in pairs(defaults) do
-        if parameters[k] == nil then
-            parameters[k] = defaults[k]
-        end
-    end
-    return parameters
-end
 
 local function parse_boolean(v)
     if v == '1' or v == 'true' or v == 'TRUE' then
@@ -92,18 +81,6 @@ local function sort_request(command, key, params)
     return query
 end
 
-local function mset_request(command, ...)
-    local args, arguments = {...}, {}
-    if (#args == 1 and type(args[1]) == 'table') then
-        for k,v in pairs(args[1]) do
-            table.insert(arguments, k)
-            table.insert(arguments, v)
-        end
-    else
-        arguments = args
-    end
-    return arguments
-end
 
 local function separate_reply(reply)
 	local vals, scores = {}, {}
@@ -228,40 +205,27 @@ local ret = db:pipeline(function (p)
 	end
 
 end)
-
-
-
 --]]
 
 
 client_prototype.pipeline = function(client, block)
 	local cmd_collector = {}
+	local cmd_args_collector = {}
 	
     local pipeline = setmetatable({}, {
         __index = function(env, name)
-			print('enter pipeline metatable', name)
-			-- cmd is a function here, we need cmd name
-            --local cmd = client[name]
---            if not cmd then
---                client.error('unknown redis command: ' .. name, 2)
---            end
 			-- name is command name
 			return function(self, ...)
 				-- collect the used commands
 				table.insert(cmd_collector, name)
-				print(name)
+				table.insert(cmd_args_collector, {...})
+				
 				client.conn:append_command(name, ...)
-            	-- here, execute each command, which will call client.network.write, 
-				-- and client.network.read function. 
-                -- local reply = cmd(client, ...)
-                -- table_insert(parsers, #requests, reply.parser)
-                -- return reply
             end
         end
     })
 
     local success, retval = pcall(block, pipeline)
-	print('success', success)
 --    if not success then client.error(retval, 0) end
 
 	local replies = {}
@@ -271,20 +235,18 @@ client_prototype.pipeline = function(client, block)
 
 	for i = 1, #cmd_collector do
 		local opts = cmds_opts_collector[ string.upper(cmd_collector[i]) ]
-		print(cmd_collector[i])
 		if opts and opts.response then
-			print('-----------')
-			-- may lack some parameters, here only first replies
-			replies[i] = opts.response(replies[i])
+			replies[i] = opts.response(replies[i], unpack(cmd_args_collector[i]))
+		else
+			replies[i] = default_parser(replies[i])
 		end
 	end
-
 	
     return replies, #cmd_collector
 end
 
+--[[
 -- Publish/Subscribe
-
 do
     local channels = function(channels)
         if type(channels) == 'string' then
@@ -364,143 +326,92 @@ do
         return consumer_loop(client)
     end
 end
+--]]
 
 -- Redis transactions (MULTI/EXEC)
+client_prototype.transaction = function(client, block, options)
+	local cmd_collector = {}
+	local cmd_args_collector = {}
+	local replies = {}
+	
+	if options then
+		local watch_keys = options.watch_keys 
+		if type(watch_keys) == 'table' and #watch_keys > 0 then
+			client.conn:command('watch', unpack(watch_keys))
+		else
+			client.conn:command('watch', watch_keys)
+		end
+	end
+	
+	local cmdi = 0
+	local multi_starti = 128
+    local transaction= setmetatable({}, {
+        __index = function(env, name)
+			-- name is command name
+			return function(self, ...)
+				-- collect the used commands
+				
+				if name == 'multi' then
+					-- only once in each transaction
+					client.conn:command(name)
+					multi_starti = cmdi
+				elseif name == 'exec' then
+					-- only once in each transaction
+					-- this is always called at last
+					replies = client.conn:command(name)
+					return
+				else
+					-- the commands between watch and multi
+					if cmdi < multi_starti then
+						-- return its value immediately
+						return client.conn:command(name, ...)
+					else
+						-- the commands between multi and exec, 
+						-- we don't need its values immediately
+						client.conn:command(name, ...)
+						table.insert(cmd_collector, name)
+						table.insert(cmd_args_collector, {...})
 
-do
-    local function identity(...) return ... end
-    local emptytable = {}
-
-    local function initialize_transaction(client, options, block, queued_parsers)
-        local table_insert = table.insert
-        local coro = coroutine.create(block)
-
-        if options.watch then
-            local watch_keys = {}
-            for _, key in pairs(options.watch) do
-                table_insert(watch_keys, key)
-            end
-            if #watch_keys > 0 then
-                client:watch(unpack(watch_keys))
-            end
-        end
-
-        local transaction_client = setmetatable({}, {__index=client})
-        transaction_client.exec  = function(...)
-            client.error('cannot use EXEC inside a transaction block')
-        end
-        transaction_client.multi = function(...)
-            coroutine.yield()
-        end
-        transaction_client.commands_queued = function()
-            return #queued_parsers
-        end
-
-        assert(coroutine.resume(coro, transaction_client))
-
-        transaction_client.multi = nil
-        transaction_client.discard = function(...)
-            local reply = client:discard()
-            for i, v in pairs(queued_parsers) do
-                queued_parsers[i]=nil
-            end
-            coro = initialize_transaction(client, options, block, queued_parsers)
-            return reply
-        end
-        transaction_client.watch = function(...)
-            client.error('WATCH inside MULTI is not allowed')
-        end
-        setmetatable(transaction_client, { __index = function(t, k)
-                local cmd = client[k]
-                if type(cmd) == "function" then
-                    local function queuey(self, ...)
-                        local reply = cmd(client, ...)
-                        assert((reply or emptytable).queued == true, 'a QUEUED reply was expected')
-                        table_insert(queued_parsers, reply.parser or identity)
-                        return reply
-                    end
-                    t[k]=queuey
-                    return queuey
-                else
-                    return cmd
-                end
-            end
-        })
-        client:multi()
-        return coro
-    end
-
-    local function transaction(client, options, coroutine_block, attempts)
-        local queued_parsers, replies = {}, {}
-        local retry = tonumber(attempts) or tonumber(options.retry) or 2
-        local coro = initialize_transaction(client, options, coroutine_block, queued_parsers)
-
-        local success, retval
-        if coroutine.status(coro) == 'suspended' then
-            success, retval = coroutine.resume(coro)
-        else
-            -- do not fail if the coroutine has not been resumed (missing t:multi() with CAS)
-            success, retval = true, 'empty transaction'
-        end
-        if #queued_parsers == 0 or not success then
-            client:discard()
-            assert(success, retval)
-            return replies, 0
-        end
-
-        local raw_replies = client:exec()
-        if not raw_replies then
-            if (retry or 0) <= 0 then
-                client.error("MULTI/EXEC transaction aborted by the server")
-            else
-                --we're not quite done yet
-                return transaction(client, options, coroutine_block, retry - 1)
+					end
+				end
+				cmdi = cmdi + 1
             end
         end
+    })
 
-        local table_insert = table.insert
-        for i, parser in pairs(queued_parsers) do
-            table_insert(replies, i, parser(raw_replies[i]))
-        end
+    local success, retval = pcall(block, transaction)
+	--    if not success then client.error(retval, 0) end
+	if options then
+		local retry_times = options.retry
+		-- retry body
+		while success 
+			and ( replies == hiredis.NIL or #replies == 0)
+			and type(tonumber(retry_times)) == 'number' 
+			and retry_times > 0 do
+			
+			cmdi = 0
+			multi_starti = 128
+			success = pcall(block, transaction)
+			retry_times = retry_times - 1
+		end
+	end
 
-        return replies, #queued_parsers
-    end
-
-    client_prototype.transaction = function(client, arg1, arg2)
-        local options, block
-        if not arg2 then
-            options, block = {}, arg1
-        elseif arg1 then --and arg2, implicitly
-            options, block = type(arg1)=="table" and arg1 or { arg1 }, arg2
-        else
-            client.error("Invalid parameters for redis transaction.")
-        end
-
-        if not options.watch then
-            local watch_keys = {}
-            for i, v in pairs(options) do
-                if tonumber(i) then
-                    table.insert(watch_keys, v)
-                    options[i] = nil
-                end
-            end
-            options.watch = watch_keys
-        elseif not (type(options.watch) == 'table') then
-            options.watch = { options.watch }
-        end
-
-        if not options.cas then
-            local tx_block = block
-            block = function(client, ...)
-                client:multi()
-                return tx_block(client, ...) --can't wrap this in pcall because we're in a coroutine.
-            end
-        end
-
-        return transaction(client, options, block)
-    end
+	if #replies > 0 then
+		for i = 1, #cmd_collector do
+			local opts = cmds_opts_collector[ string.upper(cmd_collector[i]) ]
+			if opts and opts.response then
+				replies[i] = opts.response(replies[i], unpack(cmd_args_collector[i]))
+			else
+				replies[i] = default_parser(replies[i])
+			end
+		end
+	end
+	
+    return replies, #cmd_collector
 end
 
+
+--[[
 -- MONITOR context
 
 do
@@ -545,49 +456,8 @@ do
         return monitor_loop(client)
     end
 end
-
--- ############################################################################
---[[
-local function connect_tcp(socket, parameters)
-    local host, port = parameters.host, tonumber(parameters.port)
-    local ok, err = socket:connect(host, port)
-    if not ok then
-        redis.error('could not connect to '..host..':'..port..' ['..err..']')
-    end
-    socket:setoption('tcp-nodelay', parameters.tcp_nodelay)
-    return socket
-end
-
-local function connect_unix(socket, parameters)
-    local ok, err = socket:connect(parameters.path)
-    if not ok then
-        redis.error('could not connect to '..parameters.path..' ['..err..']')
-    end
-    return socket
-end
-
-local function create_connection(parameters)
-    if parameters.socket then
-        return parameters.socket
-    end
-
-    local perform_connection, socket
-
-    if parameters.scheme == 'unix' then
-        perform_connection, socket = connect_unix, require('socket.unix')
-        assert(socket, 'your build of LuaSocket does not support UNIX domain sockets')
-    else
-        if parameters.scheme then
-            local scheme = parameters.scheme
-            assert(scheme == 'redis' or scheme == 'tcp', 'invalid scheme: '..scheme)
-        end
-        perform_connection, socket = connect_tcp, require('socket').tcp
-    end
-
-    return perform_connection(socket(), parameters)
-end
 --]]
--- ############################################################################
+
 
 redis.command = command
 
@@ -673,10 +543,10 @@ redis.commands = {
     setex            = command('SETEX'),        -- >= 2.0
     psetex           = command('PSETEX'),       -- >= 2.6
     mset             = command('MSET', {
-        request = mset_request
+--        request = mset_request
     }),
     msetnx           = command('MSETNX', {
-        request  = mset_request,
+--        request  = mset_request,
         response = toboolean
     }),
     get              = command('GET'),
