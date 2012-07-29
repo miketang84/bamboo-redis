@@ -20,6 +20,9 @@ context("Bamboo Redis Testing", function ()
 		test("set & del & exists", function ()
 			db:set('test_001', 'xyz')
 			assert_equal(db:exists('test_001'), true)
+			local ctype = db:type('test_001')
+			assert_equal(ctype, 'string')
+			
 			db:del('test_001')
 			assert_equal(db:exists('test_001'), false)
 			

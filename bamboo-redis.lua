@@ -165,16 +165,16 @@ end
 local cmds_opts_collector = {}
 
 
-local function command(command, opts)
-    command, opts = string.upper(command), opts or {}
+local function command(cmd, opts)
+    cmd, opts = string.upper(cmd), opts or {}
 	if opts then
-		cmds_opts_collector[command] = opts
+		cmds_opts_collector[cmd] = opts
 	end
 
     if opts.handler then
         local handler = opts.handler
         return function(client, ...)
-            return handler(client, command, ...)
+            return handler(client, cmd, ...)
         end
     end
 
@@ -182,8 +182,8 @@ local function command(command, opts)
     local parser = opts.response or default_parser
 
     return function(client, ...)
- 		local reply = client.conn:command(command, serializer(command, ...))
-		return parser(reply, command, ...)
+ 		local reply = client.conn:command(cmd, serializer(cmd, ...))
+		return parser(reply, cmd, ...)
 	end
 end
 
@@ -345,6 +345,7 @@ client_prototype.transaction = function(client, block, options)
 	
 	local cmdi = 0
 	local multi_starti = 128
+	local multi_stopi = 128
     local transaction= setmetatable({}, {
         __index = function(env, name)
 			-- name is command name
@@ -359,10 +360,11 @@ client_prototype.transaction = function(client, block, options)
 					-- only once in each transaction
 					-- this is always called at last
 					replies = client.conn:command(name)
+					multi_stopi = cmdi
 					return
 				else
 					-- the commands between watch and multi
-					if cmdi < multi_starti then
+					if cmdi < multi_starti or cmdi > multi_stopi then
 						-- return its value immediately
 						return client.conn:command(name, ...)
 					else
