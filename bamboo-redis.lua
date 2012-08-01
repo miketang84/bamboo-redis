@@ -151,9 +151,9 @@ end
 
 local default_serializer = function(cmd, ...) return ... end
 local default_parser = function(reply, ...) 
-	if reply == hiredis.status.NIL then 
+	if reply == hiredis.status.NIL or reply == hiredis.NIL  then 
 		reply = nil 
-	elseif reply == hiredis.status.OK then
+	elseif reply == hiredis.status.OK or reply == hiredis.OK then
 		reply = true
 	elseif type(reply) == 'table' and reply.name then
 		reply = reply.name
