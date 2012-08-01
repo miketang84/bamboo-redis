@@ -151,10 +151,12 @@ end
 
 local default_serializer = function(cmd, ...) return ... end
 local default_parser = function(reply, ...) 
-	if reply == hiredis.NIL then 
+	if reply == hiredis.status.NIL then 
 		reply = nil 
-	elseif reply == hiredis.OK then
+	elseif reply == hiredis.status.OK then
 		reply = true
+	elseif type(reply) == 'table' and reply.name then
+		reply = reply.name
 	end
 
 	-- TODO: when meet error, hiredis return a table containing error info
