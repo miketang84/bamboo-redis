@@ -31,7 +31,17 @@ context("Bamboo Redis Testing", function ()
 		test("keys", function ()
 			local ret = db:keys('*')
 			assert_equal(type(ret) == 'table', true)
-			ptable(ret)
+			--ptable(ret)
+		end)
+		
+        test("incr & decr", function ()
+            db:set('test_incr', 10)
+			db:incr('test_incr')
+
+			assert_equal(db:get('test_incr'), '11')
+            db:decr('test_incr')
+			assert_equal(db:get('test_incr'), '10')
+
 		end)
 
 

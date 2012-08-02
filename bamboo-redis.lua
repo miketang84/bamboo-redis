@@ -368,7 +368,16 @@ client_prototype.transaction = function(client, block, options)
 					-- the commands between watch and multi
 					if cmdi < multi_starti or cmdi > multi_stopi then
 						-- return its value immediately
-						return client.conn:command(name, ...)
+
+						local reply = client.conn:command(name, ...)
+		                local opts = cmds_opts_collector[ name ]
+		                if opts and opts.response then
+            				reply = opts.response(reply, ...)
+			            else
+				            reply = default_parser(reply)
+			            end
+                        
+                        return reply
 					else
 						-- the commands between multi and exec,
 						-- we don't need its values immediately
@@ -385,7 +394,7 @@ client_prototype.transaction = function(client, block, options)
 
     local success, retval = pcall(block, transaction)
 	--    if not success then client.error(retval, 0) end
-	if options then
+--[[	if options then
 		local retry_times = options.retry
 		-- retry body
 		while success
@@ -399,7 +408,7 @@ client_prototype.transaction = function(client, block, options)
 			retry_times = retry_times - 1
 		end
 	end
-
+--]]
 	if #replies > 0 then
 		for i = 1, #cmd_collector do
 			local opts = cmds_opts_collector[ string.upper(cmd_collector[i]) ]
