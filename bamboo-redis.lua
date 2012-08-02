@@ -170,7 +170,7 @@ local cmds_opts_collector = {}
 local function command(cmd, opts)
     cmd, opts = string.upper(cmd), opts or {}
 	if opts then
-		cmds_opts_collector[cmd] = opts
+		cmds_opts_collector[cmd:lower()] = opts
 	end
 
     if opts.handler then
@@ -209,12 +209,25 @@ local ret = db:pipeline(function (p)
 end)
 --]]
 
+-- here, cmd_name is lowercase
+local parse_reply = function (reply, cmd_name, ...)
+  local opts = cmds_opts_collector[cmd_name]
+  if opts and opts.response then
+    reply = opts.response(reply, ...)
+  else
+    reply = default_parser(reply)
+  end
+
+  return reply
+end
+
 
 client_prototype.pipeline = function(client, block)
 	local cmd_collector = {}
 	local cmd_args_collector = {}
 
     local pipeline = setmetatable({}, {
+        -- here, name is lowercase
         __index = function(env, name)
 			-- name is command name
 			return function(self, ...)
@@ -228,21 +241,16 @@ client_prototype.pipeline = function(client, block)
     })
 
     local success, retval = pcall(block, pipeline)
---    if not success then client.error(retval, 0) end
+    if not success then client.error(retval, 0) end
 
 	local replies = {}
 	for i = 1, #cmd_collector do
 		table.insert(replies, client.conn:get_reply())
 	end
 
-	for i = 1, #cmd_collector do
-		local opts = cmds_opts_collector[ string.upper(cmd_collector[i]) ]
-		if opts and opts.response then
-			replies[i] = opts.response(replies[i], unpack(cmd_args_collector[i]))
-		else
-			replies[i] = default_parser(replies[i])
-		end
-	end
+    for i, cmd in ipairs(cmd_collector) do
+      replies[i] = parse_reply(replies[i], cmd, unpack(cmd_args_collector[i]))
+    end
 
     return replies, #cmd_collector
 end
@@ -370,14 +378,7 @@ client_prototype.transaction = function(client, block, options)
 						-- return its value immediately
 
 						local reply = client.conn:command(name, ...)
-		                local opts = cmds_opts_collector[ name ]
-		                if opts and opts.response then
-            				reply = opts.response(reply, ...)
-			            else
-				            reply = default_parser(reply)
-			            end
-                        
-                        return reply
+		                return parse_reply(reply, name, ...)
 					else
 						-- the commands between multi and exec,
 						-- we don't need its values immediately
@@ -393,31 +394,24 @@ client_prototype.transaction = function(client, block, options)
     })
 
     local success, retval = pcall(block, transaction)
-	--    if not success then client.error(retval, 0) end
---[[	if options then
-		local retry_times = options.retry
+	if not success then client.error(retval, 0) end
+	if options then
+      local retry_times = tonumber(options.retry)
+      if type(retry_times) == 'number' and retry_times > 0 then
 		-- retry body
-		while success
-			and ( replies == hiredis.NIL or #replies == 0)
-			and type(tonumber(retry_times)) == 'number'
-			and retry_times > 0 do
-
-			cmdi = 0
-			multi_starti = 128
-			success = pcall(block, transaction)
-			retry_times = retry_times - 1
-		end
+		while success and (replies == hiredis.status.NIL or replies == hiredis.NIL) do
+            cmdi = 0
+            multi_starti = 128
+            success = pcall(block, transaction)
+            retry_times = retry_times - 1
+        end
+      end
 	end
---]]
+
 	if #replies > 0 then
-		for i = 1, #cmd_collector do
-			local opts = cmds_opts_collector[ string.upper(cmd_collector[i]) ]
-			if opts and opts.response then
-				replies[i] = opts.response(replies[i], unpack(cmd_args_collector[i]))
-			else
-				replies[i] = default_parser(replies[i])
-			end
-		end
+        for i, cmd in ipairs(cmd_collector) do
+            replies[i] = parse_reply(replies[i], cmd, unpack(cmd_args_collector[i]))
+        end
 	end
 
     return replies, #cmd_collector
