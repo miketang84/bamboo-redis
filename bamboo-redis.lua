@@ -150,9 +150,9 @@ end
 
 
 local default_serializer = function(cmd, ...) return ... end
-local default_parser = function(reply, ...) 
-	if reply == hiredis.status.NIL or reply == hiredis.NIL  then 
-		reply = nil 
+local default_parser = function(reply, ...)
+	if reply == hiredis.status.NIL or reply == hiredis.NIL  then
+		reply = nil
 	elseif reply == hiredis.status.OK or reply == hiredis.OK then
 		reply = true
 	elseif type(reply) == 'table' and reply.name then
@@ -161,7 +161,7 @@ local default_parser = function(reply, ...)
 
 	-- TODO: when meet error, hiredis return a table containing error info
 	-- how to form it, use unwrap_reply may slower the performance
-	return reply 
+	return reply
 end
 
 local cmds_opts_collector = {}
@@ -201,7 +201,7 @@ end
 -- Command pipelining
 --[[
 local ret = db:pipeline(function (p)
-	
+
 	for _, key in ipairs(list) do
 		p:hgetall(key)
 	end
@@ -213,7 +213,7 @@ end)
 client_prototype.pipeline = function(client, block)
 	local cmd_collector = {}
 	local cmd_args_collector = {}
-	
+
     local pipeline = setmetatable({}, {
         __index = function(env, name)
 			-- name is command name
@@ -221,7 +221,7 @@ client_prototype.pipeline = function(client, block)
 				-- collect the used commands
 				table.insert(cmd_collector, name)
 				table.insert(cmd_args_collector, {...})
-				
+
 				client.conn:append_command(name, ...)
             end
         end
@@ -243,7 +243,7 @@ client_prototype.pipeline = function(client, block)
 			replies[i] = default_parser(replies[i])
 		end
 	end
-	
+
     return replies, #cmd_collector
 end
 
@@ -335,16 +335,16 @@ client_prototype.transaction = function(client, block, options)
 	local cmd_collector = {}
 	local cmd_args_collector = {}
 	local replies = {}
-	
+
 	if options then
-		local watch_keys = options.watch 
+		local watch_keys = options.watch
 		if type(watch_keys) == 'table' and #watch_keys > 0 then
 			client.conn:command('watch', unpack(watch_keys))
 		else
 			client.conn:command('watch', watch_keys)
 		end
 	end
-	
+
 	local cmdi = 0
 	local multi_starti = 128
 	local multi_stopi = 128
@@ -353,7 +353,7 @@ client_prototype.transaction = function(client, block, options)
 			-- name is command name
 			return function(self, ...)
 				-- collect the used commands
-				
+
 				if name == 'multi' then
 					-- only once in each transaction
 					client.conn:command(name)
@@ -370,7 +370,7 @@ client_prototype.transaction = function(client, block, options)
 						-- return its value immediately
 						return client.conn:command(name, ...)
 					else
-						-- the commands between multi and exec, 
+						-- the commands between multi and exec,
 						-- we don't need its values immediately
 						client.conn:command(name, ...)
 						table.insert(cmd_collector, name)
@@ -388,11 +388,11 @@ client_prototype.transaction = function(client, block, options)
 	if options then
 		local retry_times = options.retry
 		-- retry body
-		while success 
+		while success
 			and ( replies == hiredis.NIL or #replies == 0)
-			and type(tonumber(retry_times)) == 'number' 
+			and type(tonumber(retry_times)) == 'number'
 			and retry_times > 0 do
-			
+
 			cmdi = 0
 			multi_starti = 128
 			success = pcall(block, transaction)
@@ -410,7 +410,7 @@ client_prototype.transaction = function(client, block, options)
 			end
 		end
 	end
-	
+
     return replies, #cmd_collector
 end
 
@@ -485,8 +485,8 @@ function redis.connect(host, port)
     client.conn = conn
 
     return client
-	
-end	
+
+end
 
 -- ############################################################################
 
@@ -644,7 +644,16 @@ redis.commands = {
     }),
     zcount           = command('ZCOUNT'),
     zcard            = command('ZCARD'),
-    zscore           = command('ZSCORE'),
+    zscore           = command('ZSCORE', {
+      response = function (reply, command, key, val)
+        local nreply = tonumber(reply)
+        if type(nreply) == 'number' then
+          return nreply
+        else
+          return nil
+        end
+      end
+    }),
     zremrangebyscore = command('ZREMRANGEBYSCORE'),
     zrank            = command('ZRANK'),                -- >= 2.0
     zrevrank         = command('ZREVRANK'),             -- >= 2.0
