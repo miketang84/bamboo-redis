@@ -337,7 +337,7 @@ client_prototype.transaction = function(client, block, options)
 	local replies = {}
 	
 	if options then
-		local watch_keys = options.watch_keys 
+		local watch_keys = options.watch 
 		if type(watch_keys) == 'table' and #watch_keys > 0 then
 			client.conn:command('watch', unpack(watch_keys))
 		else
