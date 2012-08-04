@@ -29,6 +29,8 @@ end
 
 local function toboolean(value) return value == 1 end
 
+local function tonum(value) return tonumber(value) end
+
 local function sort_request(command, key, params)
     --[[ params = {
         by    = 'weight_*',
@@ -539,7 +541,7 @@ redis.commands = {
         end
     }),
     sort             = command('SORT', {
-        request = sort_request,
+--        request = sort_request,
     }),
 
     -- commands operating on string values
@@ -648,17 +650,20 @@ redis.commands = {
     zcount           = command('ZCOUNT'),
     zcard            = command('ZCARD'),
     zscore           = command('ZSCORE', {
-      response = function (reply, command, key, val)
-        local nreply = tonumber(reply)
-        if type(nreply) == 'number' then
-          return nreply
-        else
-          return nil
-        end
-      end
+--      response = function (reply, command, key, val)
+--        local nreply = tonumber(reply)
+--        if type(nreply) == 'number' then
+--          return nreply
+--        else
+--          return nil
+--        end
+--      end
+		response = tonum		
     }),
     zremrangebyscore = command('ZREMRANGEBYSCORE'),
-    zrank            = command('ZRANK'),                -- >= 2.0
+    zrank            = command('ZRANK', {
+    		response = tonum
+    	}),                -- >= 2.0
     zrevrank         = command('ZREVRANK'),             -- >= 2.0
     zremrangebyrank  = command('ZREMRANGEBYRANK'),      -- >= 2.0
 
