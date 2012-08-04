@@ -31,59 +31,6 @@ local function toboolean(value) return value == 1 end
 
 local function tonum(value) return tonumber(value) end
 
-local function sort_request(command, key, params)
-    --[[ params = {
-        by    = 'weight_*',
-        get   = 'object_*',
-        limit = { 0, 10 },
-        sort  = 'desc',
-        alpha = true,
-    } ]]
-    local query = { key }
-
-    if params then
-        if params.by then
-            table.insert(query, 'BY')
-            table.insert(query, params.by)
-        end
-
-        if type(params.limit) == 'table' then
-            -- TODO: check for lower and upper limits
-            table.insert(query, 'LIMIT')
-            table.insert(query, params.limit[1])
-            table.insert(query, params.limit[2])
-        end
-
-        if params.get then
-            if (type(params.get) == 'table') then
-                for _, getarg in pairs(params.get) do
-                    table.insert(query, 'GET')
-                    table.insert(query, getarg)
-                end
-            else
-                table.insert(query, 'GET')
-                table.insert(query, params.get)
-            end
-        end
-
-        if params.sort then
-            table.insert(query, params.sort)
-        end
-
-        if params.alpha == true then
-            table.insert(query, 'ALPHA')
-        end
-
-        if params.store then
-            table.insert(query, 'STORE')
-            table.insert(query, params.store)
-        end
-    end
-
-    return query
-end
-
-
 local function separate_reply(reply)
 	local vals, scores = {}, {}
 	for i = 1, #reply, 2 do
@@ -540,9 +487,7 @@ redis.commands = {
             end
         end
     }),
-    sort             = command('SORT', {
---        request = sort_request,
-    }),
+    sort             = command('SORT'),
 
     -- commands operating on string values
     set              = command('SET'),
