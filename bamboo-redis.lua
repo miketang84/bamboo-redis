@@ -641,7 +641,8 @@ redis.commands = {
     hvals            = command('HVALS'),        -- >= 2.0
     hgetall          = command('HGETALL', {     -- >= 2.0
         response = function(reply, command, ...)
-            local new_reply = {}
+            if not reply then return {} end
+		local new_reply = {}
             for i = 1, #reply, 2 do new_reply[reply[i]] = reply[i + 1] end
             return new_reply
         end
