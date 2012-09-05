@@ -133,7 +133,8 @@ local function command(cmd, opts)
     local parser = opts.response or default_parser
 
     return function(client, ...)
- 		local reply = client.conn:command(cmd, serializer(cmd, ...))
+ 		local flag, reply = pcall(client.conn.command, client.conn, cmd, serializer(cmd, ...))
+		if not flag then print(debug.traceback()); return nil end
 		return parser(reply, cmd, ...)
 	end
 end
@@ -327,7 +328,7 @@ client_prototype.transaction = function(client, block, options)
 						-- return its value immediately
 
 						local reply = client.conn:command(name, ...)
-		                return parse_reply(reply, name, ...)
+		                		return parse_reply(reply, name, ...)
 					else
 						-- the commands between multi and exec,
 						-- we don't need its values immediately
