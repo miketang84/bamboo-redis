@@ -422,12 +422,10 @@ function redis.error(message, level)
     error(message, (level or 1) + 1)
 end
 
-
 function redis.connect(host, port)
 	host = host or '127.0.0.1'
 	port = port or 6379
 	local conn = assert(hiredis.connect(host, port))
-
     local commands = redis.commands or {}
     if type(commands) ~= 'table' then
         redis.error('invalid type for the commands table')
@@ -632,7 +630,13 @@ redis.commands = {
     }),
     hget             = command('HGET'),         -- >= 2.0
     hmget            = command('HMGET', {       -- >= 2.0
-    }),
+		response = function(reply, command, ...)
+            for i, v in ipairs(reply) do
+				reply[i] = hiredis.unwrap_reply(v)
+			end
+			return reply
+        end,
+	}),
     hdel             = command('HDEL'),        -- >= 2.0
     hexists          = command('HEXISTS', {     -- >= 2.0
         response = toboolean
