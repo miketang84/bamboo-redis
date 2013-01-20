@@ -1,9 +1,9 @@
 local hiredis = require 'hiredis'
 
 local redis = {
-    _VERSION     = 'redis-lua 3.0.0-dev',
+    _VERSION     = 'bamboo-redis 0.1.0',
     _DESCRIPTION = 'A Lua client library for the redis key value storage system.',
-    _COPYRIGHT   = 'Copyright (C) 2009-2012 Daniele Alessandri',
+    _COPYRIGHT   = 'Copyright (C) 2009-2013 Daogang Tang & Daniele Alessandri',
 }
 
 local unpack = _G.unpack or table.unpack
@@ -115,7 +115,6 @@ end
 
 local cmds_opts_collector = {}
 
-
 local function command(cmd, opts)
     cmd, opts = string.upper(cmd), opts or {}
 	if opts then
@@ -132,11 +131,19 @@ local function command(cmd, opts)
     local serializer = opts.request or default_serializer
     local parser = opts.response or default_parser
 
-    return function(client, ...)
- 		local flag, reply = pcall(client.conn.command, client.conn, cmd, serializer(cmd, ...))
+	return function(client, ...)
+		local flag, reply
+		if client._slaves and #client._slaves > 0 and redis.command_types[cmd:lower()] == 'r' then
+			local which = math.random(1, #client._slaves)
+			local slave_client = client._slaves[which]
+			flag, reply = pcall(slave_client.conn.command, slave_client.conn, cmd, serializer(cmd, ...))
+		else
+			flag, reply = pcall(client.conn.command, client.conn, cmd, serializer(cmd, ...))
+		end
 		if not flag then print(debug.traceback()); return nil end
 		return parser(reply, cmd, ...)
 	end
+
 end
 
 -- ############################################################################
@@ -175,6 +182,12 @@ end
 client_prototype.pipeline = function(client, block)
 	local cmd_collector = {}
 	local cmd_args_collector = {}
+
+	-- only for only hgetall, hmget exist in pipeline cases
+	if client._slaves and #client._slaves > 0 then
+		local which = math.random(1, #client._slaves)
+		client = client._slaves[which]
+	end
 
     local pipeline = setmetatable({}, {
         -- here, name is lowercase
@@ -438,6 +451,14 @@ function redis.connect(host, port)
     return client
 
 end
+
+--[[
+function redis.pushslave(sdb)
+	if sdb then
+		slave_idle_pool[sdb] = true
+	end
+end
+--]]
 
 -- ############################################################################
 
@@ -725,7 +746,202 @@ redis.commands = {
         response = parse_info,
     }),
     shutdown         = command('SHUTDOWN'),
+
+	-- add this virtual command for read-only script
+	evalshar		 = command('EVALSHAR')
+
 }
+
+redis.command_types = {
+    -- commands operating on the key space
+    exists           = 'r',
+    del              = 'w',
+    type             = 'r',
+    rename           = 'w',
+    renamenx         = 'w',
+    expire           = 'w',
+    pexpire          = 'w',
+    expireat         = 'w',
+    pexpireat        = 'w',
+    ttl              = 'r',
+    pttl             = 'r',
+    move             = 'w',
+    dbsize           = 'r',
+    persist          = 'w',
+    keys             = 'r',
+    randomkey        = 'r',
+    sort             = 'w', 
+
+    -- commands operating on string values
+    set              = 'w',
+    setnx            = 'w',
+    setex            = 'w',
+    psetex           = 'w',
+    mset             = 'w',
+    msetnx           = 'w',
+    get              = 'r',
+    mget             = 'r',
+    getset           = 'w',
+    incr             = 'w',
+    incrby           = 'w',
+    incrbyfloat      = 'w',
+    decr             = 'w', 
+    decrby           = 'w',
+    append           = 'w',
+    substr           = 'r',
+    strlen           = 'r',
+    setrange         = 'w',
+    getrange         = 'r',
+    setbit           = 'w',
+    getbit           = 'r',
+
+    -- commands operating on lists
+    rpush            = 'w',
+    lpush            = 'w',
+    llen             = 'r',
+    lrange           = 'r',
+    ltrim            = 'w',
+    lindex           = 'r',
+    lset             = 'w',
+    lrem             = 'w',
+    lpop             = 'w',
+    rpop             = 'w',
+    rpoplpush        = 'w',
+    blpop            = 'w',
+    brpop            = 'w',
+    rpushx           = 'w',
+    lpushx           = 'w',
+    linsert          = 'w',
+    brpoplpush       = 'w',
+
+    -- commands operating on sets
+    sadd             = 'w',
+    srem             = 'w',
+    spop             = 'w',
+    smove            = 'w',
+    scard            = 'r',
+    sismember        = 'r',
+    sinter           = 'r',
+    sinterstore      = 'w',
+    sunion           = 'r',
+    sunionstore      = 'w',
+    sdiff            = 'r',
+    sdiffstore       = 'w',
+    smembers         = 'r',
+    srandmember      = 'r',
+
+    -- commands operating on sorted sets
+    zadd             = 'w',
+    zincrby          = 'w',
+    zrem             = 'w',
+    zrange           = 'r',
+    zrevrange        = 'r',
+    zrangebyscore    = 'r',
+    zrevrangebyscore = 'r',
+    zunionstore      = 'w',
+    zinterstore      = 'w',
+    zcount           = 'r',
+    zcard            = 'r',
+    zscore           = 'r',
+    zremrangebyscore = 'w',
+    zrank            = 'r',
+    zrevrank         = 'r',
+    zremrangebyrank  = 'w',
+
+    -- commands operating on hashes
+    hset             = 'w',
+    hsetnx           = 'w',
+    hmset            = 'w',
+    hincrby          = 'w',
+    hincrbyfloat     = 'w',
+    hget             = 'r',
+    hmget            = 'r',
+    hdel             = 'w',
+    hexists          = 'r',
+    hlen             = 'r',
+    hkeys            = 'r',
+    hvals            = 'r',
+    hgetall          = 'r',
+
+	-- scripts
+	eval			 = 'w',
+	evalshar		 = 'r'
+	
+    -- -- connection related commands
+    -- ping             = 'rw',
+    -- echo             = 'rw',
+    -- auth             = 'rw',
+    -- select           = 'rw',
+    -- quit             = 'rw',
+
+    -- -- transactions
+    -- multi            = command('MULTI'),        -- >= 2.0
+    -- exec             = command('EXEC'),         -- >= 2.0
+    -- discard          = command('DISCARD'),      -- >= 2.0
+    -- watch            = command('WATCH'),        -- >= 2.2
+    -- unwatch          = command('UNWATCH'),      -- >= 2.2
+
+    -- -- publish - subscribe
+    -- subscribe        = command('SUBSCRIBE'),    -- >= 2.0
+    -- unsubscribe      = command('UNSUBSCRIBE'),  -- >= 2.0
+    -- psubscribe       = command('PSUBSCRIBE'),   -- >= 2.0
+    -- punsubscribe     = command('PUNSUBSCRIBE'), -- >= 2.0
+    -- publish          = command('PUBLISH'),      -- >= 2.0
+
+    -- -- redis scripting
+    -- eval             = command('EVAL'),         -- >= 2.6
+    -- evalsha          = command('EVALSHA'),      -- >= 2.6
+    -- script           = command('SCRIPT'),       -- >= 2.6
+
+    -- -- remote server control commands
+    -- bgrewriteaof     = command('BGREWRITEAOF'),
+    -- config           = command('CONFIG', {     -- >= 2.0
+    --     response = function(reply, command, ...)
+    --         if (type(reply) == 'table') then
+    --             local new_reply = { }
+    --             for i = 1, #reply, 2 do new_reply[reply[i]] = reply[i + 1] end
+    --             return new_reply
+    --         end
+
+    --         return reply
+    --     end
+    -- }),
+    -- client           = command('CLIENT'),       -- >= 2.4
+    -- slaveof          = command('SLAVEOF'),
+    -- save             = command('SAVE'),
+    -- bgsave           = command('BGSAVE'),
+    -- lastsave         = command('LASTSAVE'),
+    -- flushdb          = command('FLUSHDB'),
+    -- flushall         = command('FLUSHALL'),
+    -- monitor          = command('MONITOR'),
+    -- time             = command('TIME'),         -- >= 2.6
+    -- slowlog          = command('SLOWLOG', {     -- >= 2.2.13
+    --     response = function(reply, command, ...)
+    --         if (type(reply) == 'table') then
+    --             local structured = { }
+    --             for index, entry in ipairs(reply) do
+    --                 structured[index] = {
+    --                     id = tonumber(entry[1]),
+    --                     timestamp = tonumber(entry[2]),
+    --                     duration = tonumber(entry[3]),
+    --                     command = entry[4],
+    --                 }
+    --             end
+    --             return structured
+    --         end
+
+    --         return reply
+    --     end
+    -- }),
+    -- info             = command('INFO', {
+    --     response = parse_info,
+    -- }),
+    -- shutdown         = command('SHUTDOWN'),
+}
+
+-- ############################################################################
+
+
 
 -- ############################################################################
 
