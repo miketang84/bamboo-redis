@@ -652,9 +652,11 @@ redis.commands = {
     hget             = command('HGET'),         -- >= 2.0
     hmget            = command('HMGET', {       -- >= 2.0
 		response = function(reply, command, ...)
-            for i, v in ipairs(reply) do
-				reply[i] = hiredis.unwrap_reply(v)
-			end
+            for i=1, #reply do
+				if reply[i] == hiredis.NIL then
+                    reply[i] = nil
+                end
+		    end
 			return reply
         end,
 	}),
